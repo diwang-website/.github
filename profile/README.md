@@ -29,15 +29,17 @@ diwang-server/   # API
        │                              │
        │  /api/public/*               │  /api/admin/*  + JWT
        │  /api/track                  │  上传、CRUD、统计
-       │  /imagesData/*               │  /imagesData/*
+       │  资源优先 OSS                 │  资源优先 OSS
+       │  失败回源 /imagesData         │  失败回源 /imagesData
        └──────────────┬───────────────┘
                       ▼
                 diwang-server
-                （统一 API + 静态资源）
+                （统一 API；上传双写本地+OSS）
                       │
-                      ▼
-               MySQL（业务库）
-               上传目录 imagesData
+          ┌───────────┴───────────┐
+          ▼                       ▼
+   MySQL（业务库）         阿里云 OSS
+   本地 imagesData         uploads/ + diwang-web-assets/
 ```
 
 ### 1. 共用同一后端
@@ -50,9 +52,13 @@ diwang-server/   # API
 
 运营在 **admin** 中维护的产品、新闻、轮播、门店、标签、站点文案等，经 **server** 持久化后，由 **web** 在对应页面拉取并展示。后台改内容 → 接口与库更新 → 官网刷新或再次请求即可看到新数据，无需改前台代码。
 
-### 3. 媒体与文件
+### 3. 媒体与文件（本地 + 阿里云 OSS）
 
-富文本与列表中的图片、下载资料等由 **server** 接收上传并落在挂载的 `imagesData`（生产上由宿主机目录挂入容器）。**web** / **admin** 通过同一资源路径访问这些文件，保证前台展示与后台预览一致。
+富文本与列表中的图片、下载资料等由 **server** 接收上传：先落在挂载的 `imagesData`（宿主机 `/www/data/diwang/imagesData`），再同步到阿里云 OSS Bucket `diwang-website-v2` 的 `uploads/` 前缀（键不含 `imagesData`）。历史资源已全量同步；后续上传仍「本地优先落盘 + OSS 双写」。
+
+**读取顺序**：浏览器 / 前台 / 后台优先访问 OSS 公网地址 `https://diwang-website-v2.oss-cn-beijing.aliyuncs.com/uploads/...`；OSS 缺失或报错时再回源服务器 `/imagesData/...`（服务端对存在对象会 302 到 OSS）。自定义 CNAME 需在阿里云绑定域名并配置 HTTPS 证书后方可使用。
+
+另：**diwang-web** 的 `src/assets`（站点内静态图、svg、字体文件）同步到 OSS 根目录 `diwang-web-assets/`，页面同样「先 OSS、失败再用本地打包资源」；LESS/CSS 源码仍随构建打包。
 
 ### 4. 访问统计
 
@@ -73,6 +79,7 @@ diwang-server/   # API
 - 三个仓库各自维护 Dockerfile；推送到 `main` 后由 GitHub Actions 构建镜像并推至阿里云容器镜像服务（`registry.cn-beijing.aliyuncs.com/cellular/` 下的 `diwang-web` / `diwang-admin` / `diwang-server`），再 SSH 到服务器执行对应更新脚本拉取镜像重启。
 - 服务器**不编译源码**，只运行镜像；宿主机 Nginx 终结 HTTPS，反代到本机端口上的三个容器。
 - 数据库与图片目录在编排外维护；三个容器通过同一后端与共享上传卷协作，而不是互相直接调用。
+- 对象存储：Bucket `diwang-website-v2`（华北2 北京，公共读）。业务上传对应 `uploads/`；官网静态资源对应 `diwang-web-assets/`。公网默认使用官方域名 `*.oss-cn-beijing.aliyuncs.com`；密钥仅放服务器 compose / `.env`，不进 Git。
 
 更细的端口、compose、证书与发布步骤见运维侧的 `diwang-deploy` 说明（若组织内另有运维文档，以现网文档为准）。
 
