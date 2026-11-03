@@ -40,6 +40,10 @@ diwang-server/   # API
           ▼                       ▼
    MySQL（业务库）         阿里云 OSS
    本地 imagesData         uploads/ + diwang-web-assets/
+          │
+          │ Databasus 每日 01:00
+          ▼
+   Cloudflare R2（库备份）
 ```
 
 ### 1. 共用同一后端
@@ -80,6 +84,18 @@ diwang-server/   # API
 - 服务器**不编译源码**，只运行镜像；宿主机 Nginx 终结 HTTPS，反代到本机端口上的三个容器。
 - 数据库与图片目录在编排外维护；三个容器通过同一后端与共享上传卷协作，而不是互相直接调用。
 - 对象存储：Bucket `diwang-website-v2`（华北2 北京，公共读）。业务上传对应 `uploads/`；官网静态资源对应 `diwang-web-assets/`。公网默认使用官方域名 `*.oss-cn-beijing.aliyuncs.com`；密钥仅放服务器 compose / `.env`，不进 Git。
+- 数据库备份：业务库 `diwang` 由 Databasus 每天凌晨 1:00（Asia/Shanghai）备份到 Cloudflare R2。细节见下节。
+
+### 数据库备份
+
+业务 MySQL 由独立容器 **Databasus** 定时备份到 Cloudflare R2，与媒体文件使用的阿里云 OSS 分开。
+
+- 容器名 `databasus`，镜像 `databasus/databasus:latest`（应用版本约 3.29.1）。编排文件 `/root/databasus/docker-compose.yml`；数据卷 `/root/databasus/databasus-data` 挂载到容器 `/databasus-data`；时区 `TZ=Asia/Shanghai`。
+- 使用外部网络 `docker_yml_bridge`，与业务 compose 同网，以便访问 MySQL。备份对象为 MySQL 5.7，地址 `mysql57:3306`，库名 `diwang`（在 Databasus 中的显示名为 `mysql57`）。管理端口映射为宿主机 `11672` → 容器 `4005`，供内网运维使用。
+- 已启用每日备份，执行时间为每天凌晨 1:00（Asia/Shanghai）。Databasus 配置中的 `time_of_day=17:00` 按 UTC 存储，对应上海时间凌晨 1 点。
+- 远端为 Cloudflare R2（S3 兼容），存储名「地王SQL」；Bucket `diwang`，region `auto`，endpoint 形态为 `https://<accountid>.r2.cloudflarestorage.com`。
+- 保留策略为按时间保留约 3 个月（`retention_time_period=3_MONTH`）。备份文件上传到 R2；本地 `databasus-data/backups` 目录当前为空，以 R2 为准。
+- R2 的 Access Key、Secret 与账号标识在 Databasus 控制台配置，不进 Git。
 
 更细的端口、compose、证书与发布步骤见运维侧的 `diwang-deploy` 说明（若组织内另有运维文档，以现网文档为准）。
 
